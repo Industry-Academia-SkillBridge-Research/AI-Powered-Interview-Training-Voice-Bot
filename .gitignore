@@ -1,2 +1,14 @@
 # Input files
-input/
+inputs/
+
+.venv/
+venv/
+
+chat/
+
+wav2vec2_emotion_model/
+wav2vec2_emotion_preprocessed/
+
+old_labels/
+
+models/

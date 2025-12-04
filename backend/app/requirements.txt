@@ -1,0 +1,25 @@
+# Requirements for model_training/emotion_detection.ipynb
+# Minimal pinned versions to ensure evaluation_strategy/save_strategy and other APIs are available.
+# These are recommendations — if you need a GPU-specific wheel for torch, use the appropriate index as in the notebook.
+transformers>=4.11.0,<5.0.0
+datasets>=2.0.0
+huggingface-hub>=0.10.0
+accelerate>=0.20.0
+torch>=1.13.0
+torchaudio>=0.13.0
+librosa>=0.10.0
+soundfile>=0.12.1
+scikit-learn>=1.1.0
+numpy>=1.24
+seaborn>=0.12.0
+matplotlib>=3.5.0
+jiwer>=2.5.0
+noisereduce>=2.0.0
+packaging>=23.0
+tqdm>=4.65.0
+ipywidgets>=8.0.0
+torchvision>=0.14.0
+
+# Optional but helpful:
+# jupyter and ipywidgets are useful for notebook UI; install them if not present.
+jupyterlab>=3.5.0

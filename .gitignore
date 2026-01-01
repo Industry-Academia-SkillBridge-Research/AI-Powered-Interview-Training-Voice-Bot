@@ -11,14 +11,14 @@ wav2vec2_emotion_preprocessed/
 
 old_labels/
 
-models/
+
 
 
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # dependencies
-/node_modules
-/.pnp
+node_modules/
+.pnp
 .pnp.js
 
 # testing

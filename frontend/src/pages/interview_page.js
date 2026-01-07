@@ -1,33 +1,48 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import BotQuestionBox from "../components/bot_question_box";
-import MicRecorder from "../components/mic_recorder";
-import TranscriptBox from "../components/transcript_box";
+import React, { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { useJobContext } from "../job_context";
+import { startInterview, submitAnswer } from "../services/api";
 
 function InterviewPage() {
   const navigate = useNavigate();
-  const { summary, questions, extractedText } = useJobContext();
-
-  const [qIndex, setQIndex] = useState(0);
-  const [transcript, setTranscript] = useState("");
-  const [answers, setAnswers] = useState([]);
+  const [sessionId, setSessionId] = useState(null);
+  const [questionNumber, setQuestionNumber] = useState(0);
+  const [totalQuestions, setTotalQuestions] = useState(7);
+  const [userAnswer, setUserAnswer] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [isComplete, setIsComplete] = useState(false);
+  const [conversationHistory, setConversationHistory] = useState([]);
+  
+  // Speech recognition
   const [listening, setListening] = useState(false);
-  const [ttsReady, setTtsReady] = useState(Boolean(window.speechSynthesis));
-  const [sttReady, setSttReady] = useState(true);
+  const [speechSupported, setSpeechSupported] = useState(true);
   const recognitionRef = useRef(null);
-
-  const activeQuestion = questions?.[qIndex] || "Tell me about yourself and your key strengths.";
-
-  useEffect(() => {
-    if (!extractedText) navigate("/");
-  }, [extractedText, navigate]);
+  const textareaRef = useRef(null);
 
   useEffect(() => {
+    const storedSessionId = localStorage.getItem('sessionId');
+    if (!storedSessionId) {
+      navigate("/");
+      return;
+    }
+    
+    setSessionId(storedSessionId);
+    initializeInterview(storedSessionId);
+    initializeSpeechRecognition();
+    
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigate]);
+
+  const initializeSpeechRecognition = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setSttReady(false);
-      return undefined;
+      setSpeechSupported(false);
+      return;
     }
 
     const recognition = new SpeechRecognition();
@@ -36,119 +51,277 @@ function InterviewPage() {
     recognition.lang = "en-US";
 
     recognition.onresult = (event) => {
-      const result = Array.from(event.results)
-        .map((res) => res[0].transcript)
+      const transcript = Array.from(event.results)
+        .map((result) => result[0].transcript)
         .join(" ");
-      setTranscript(result);
+      setUserAnswer(transcript);
     };
 
     recognition.onstart = () => setListening(true);
     recognition.onend = () => setListening(false);
-    recognition.onerror = () => setListening(false);
+    recognition.onerror = (event) => {
+      console.error("Speech recognition error:", event.error);
+      setListening(false);
+    };
 
     recognitionRef.current = recognition;
-    return () => recognition.stop();
-  }, []);
+  };
 
-  const speakQuestion = () => {
-    if (!window.speechSynthesis) {
-      setTtsReady(false);
+  const toggleListening = () => {
+    if (!recognitionRef.current) return;
+
+    if (listening) {
+      recognitionRef.current.stop();
+    } else {
+      setUserAnswer("");
+      recognitionRef.current.start();
+    }
+  };
+
+  const initializeInterview = async (sid) => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const response = await startInterview(sid);
+      setQuestionNumber(response.question_number);
+      setTotalQuestions(response.total_questions);
+      
+      setConversationHistory([
+        { type: 'question', content: response.question, number: response.question_number }
+      ]);
+      
+      // Speak the question
+      speakText(response.question);
+      
+    } catch (err) {
+      console.error(err);
+      setError(err.response?.data?.detail || "Failed to start interview");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const speakText = (text) => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 0.9;
+      utterance.pitch = 1;
+      window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  const handleSubmitAnswer = async () => {
+    if (!userAnswer.trim()) {
+      setError("Please provide an answer");
       return;
     }
-    const utterance = new SpeechSynthesisUtterance(activeQuestion);
-    utterance.rate = 0.95;
-    utterance.pitch = 1.02;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-  };
 
-  const startListening = () => {
-    recognitionRef.current?.start();
-  };
+    if (listening && recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
 
-  const stopListening = (capture = false) => {
-    recognitionRef.current?.stop();
-    setListening(false);
-    if (capture && transcript) {
-      setAnswers((prev) => [...prev, { question: activeQuestion, answer: transcript }]);
-      setTranscript("");
+    setLoading(true);
+    setError(null);
+
+    // Add user answer to conversation
+    setConversationHistory(prev => [
+      ...prev,
+      { type: 'answer', content: userAnswer, number: questionNumber }
+    ]);
+
+    try {
+      const response = await submitAnswer(sessionId, userAnswer);
+      
+      if (response.is_complete) {
+        setIsComplete(true);
+        setConversationHistory(prev => [
+          ...prev,
+          { type: 'complete', content: 'Interview completed! Great job!' }
+        ]);
+      } else {
+        setQuestionNumber(response.question_number);
+        
+        setConversationHistory(prev => [
+          ...prev,
+          { type: 'question', content: response.question, number: response.question_number }
+        ]);
+        
+        // Speak the next question
+        speakText(response.question);
+      }
+      
+      setUserAnswer("");
+      
+    } catch (err) {
+      console.error(err);
+      setError(err.response?.data?.detail || "Failed to submit answer");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const goNext = () => {
-    stopListening();
-    const latest = transcript ? [...answers, { question: activeQuestion, answer: transcript }] : answers;
-    setAnswers(latest);
-    setTranscript("");
-    if (qIndex < questions.length - 1) setQIndex((prev) => prev + 1);
-    else navigate("/feedback", { state: { answers: latest } });
+  const handleEndInterview = () => {
+    if (window.confirm("Are you sure you want to end the interview?")) {
+      localStorage.removeItem('sessionId');
+      navigate("/feedback");
+    }
   };
 
-  const plannedQuestions = useMemo(() => questions || [], [questions]);
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      handleSubmitAnswer();
+    }
+  };
+
+  if (isComplete) {
+    return (
+      <div className="page">
+        <div className="completion-card">
+          <div className="completion-icon">🎉</div>
+          <h1>Interview Complete!</h1>
+          <p className="completion-text">
+            You've successfully completed all {totalQuestions} questions.
+          </p>
+          <div className="completion-stats">
+            <div className="stat-item">
+              <div className="stat-number">{totalQuestions}</div>
+              <div className="stat-label">Questions Answered</div>
+            </div>
+            <div className="stat-item">
+              <div className="stat-number">{conversationHistory.filter(h => h.type === 'answer').length}</div>
+              <div className="stat-label">Responses Given</div>
+            </div>
+          </div>
+          <div className="button-group">
+            <button className="button primary" onClick={() => navigate("/")}>
+              Start New Interview
+            </button>
+            <button className="button" onClick={() => navigate("/feedback")}>
+              View Conversation
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="page interview-layout">
+    <div className="page interview-page">
       <div className="page-header">
         <div>
-          <p className="eyebrow">Step 2 · Voice interview</p>
-          <h1>AI follows up using the uploaded role</h1>
-          <p className="muted">We speak the question, you answer in voice. Live transcript and recordings stay on your device.</p>
+          <div className="eyebrow">Step 2 of 2 • Interview in Progress</div>
+          <h1>AI Interview Training</h1>
+          <div className="progress-info">
+            Question {questionNumber} of {totalQuestions}
+          </div>
         </div>
-        <div className="badge">Speech beta</div>
+        <button className="button secondary-button" onClick={handleEndInterview}>
+          End Interview
+        </button>
       </div>
 
-      <div className="interview-grid">
-        <div>
-          <BotQuestionBox question={activeQuestion} />
-
-          <div className="control-card">
-            <div className="control-row">
-              <button className="button" onClick={speakQuestion}>🔊 Play question</button>
-              <button className="ghost" onClick={startListening} disabled={!sttReady || listening}>🎙️ Start listening</button>
-              <button className="secondary" onClick={() => stopListening(true)} disabled={!listening}>⏹ Stop</button>
-            </div>
-            {!sttReady && <div className="error-banner">Speech recognition not supported in this browser.</div>}
-            {!ttsReady && <div className="error-banner">Speech synthesis unavailable. Questions will still show on screen.</div>}
-          </div>
-
-          <div className="control-card">
-            <TranscriptBox transcript={transcript} />
-          </div>
-
-          <div className="control-card">
-            <MicRecorder onStop={(data) => console.log("Audio blob:", data)} />
-          </div>
-
-          <div className="actions">
-            <button className="button" onClick={goNext}>
-              {qIndex < plannedQuestions.length - 1 ? "Next question →" : "Finish and view feedback"}
-            </button>
-            <button className="secondary" onClick={() => navigate("/")}>Replace job description</button>
-          </div>
+      <div className="interview-container">
+        {/* Progress Bar */}
+        <div className="progress-bar-container">
+          <div 
+            className="progress-bar-fill" 
+            style={{ width: `${(questionNumber / totalQuestions) * 100}%` }}
+          />
         </div>
 
-        <div className="side-panel">
-          <div className="panel-title">Job description snapshot</div>
-          <p>{summary || "Upload a job description first."}</p>
-
-          <div className="panel-title" style={{ marginTop: 18 }}>Planned prompts</div>
-          <ul className="question-list">
-            {plannedQuestions.map((q, idx) => (
-              <li key={q} className={idx === qIndex ? "active" : ""}>
-                <span className="pill">Q{idx + 1}</span>
-                <span>{q}</span>
-              </li>
-            ))}
-          </ul>
-
-          <div className="panel-title" style={{ marginTop: 18 }}>Captured answers</div>
-          {answers.length === 0 && <p className="muted">Your answers appear here after you stop listening.</p>}
-          {answers.map((item, idx) => (
-            <div className="card" key={idx}>
-              <div className="muted" style={{ marginBottom: 6 }}>{item.question}</div>
-              <div>{item.answer}</div>
+        {/* Conversation Thread */}
+        <div className="conversation-thread">
+          {conversationHistory.map((item, index) => (
+            <div key={index} className={`message-bubble ${item.type}`}>
+              {item.type === 'question' && (
+                <div className="message-header">
+                  <span className="message-icon"></span>
+                  <span className="message-label">AI Interviewer</span>
+                  {item.number && (
+                    <span className="question-badge">Question {item.number}</span>
+                  )}
+                </div>
+              )}
+              {item.type === 'answer' && (
+                <div className="message-header">
+                  <span className="message-icon">👤</span>
+                  <span className="message-label">You</span>
+                </div>
+              )}
+              <div className="message-content">{item.content}</div>
             </div>
           ))}
+          
+          {loading && (
+            <div className="message-bubble question loading-bubble">
+              <div className="message-header">
+                <span className="message-icon"></span>
+                <span className="message-label">AI Interviewer</span>
+              </div>
+              <div className="typing-indicator">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Answer Input Section */}
+        <div className="answer-section">
+          <div className="answer-card">
+            <label className="input-label">Your Answer</label>
+            <div className="answer-input-group">
+              <textarea
+                ref={textareaRef}
+                className="answer-textarea"
+                value={userAnswer}
+                onChange={(e) => setUserAnswer(e.target.value)}
+                onKeyPress={handleKeyPress}
+                placeholder="Type your answer here or use the microphone..."
+                rows="4"
+                disabled={loading}
+              />
+              
+              <div className="input-controls">
+                <div className="controls-left">
+                  {speechSupported && (
+                    <button
+                      className={`icon-button ${listening ? 'listening' : ''}`}
+                      onClick={toggleListening}
+                      disabled={loading}
+                      title={listening ? "Stop recording" : "Start voice input"}
+                    >
+                      {listening ? '⏹' : '🎤'}
+                      {listening && <span className="pulse-ring"></span>}
+                    </button>
+                  )}
+                  <span className="char-count">{userAnswer.length} characters</span>
+                </div>
+                
+                <button
+                  className="button primary"
+                  onClick={handleSubmitAnswer}
+                  disabled={loading || !userAnswer.trim()}
+                >
+                  {loading ? 'Processing...' : 'Submit Answer →'}
+                </button>
+              </div>
+            </div>
+            
+            {error && (
+              <div className="error-message">
+                <span className="error-icon">⚠️</span>
+                {error}
+              </div>
+            )}
+            
+            <div className="hint-text">
+              💡 Press Ctrl+Enter to submit • Use the microphone for voice input
+            </div>
+          </div>
         </div>
       </div>
     </div>

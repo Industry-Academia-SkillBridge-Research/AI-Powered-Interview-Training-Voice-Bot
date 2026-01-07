@@ -47,3 +47,5 @@ __pychache__/
 .env
 instance/
 .pytest_cache/
+
+models/

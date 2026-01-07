@@ -15,6 +15,9 @@ numpy
 # PDF Processing
 PyMuPDF
 
+langchain
+langchain-google-genai
+
 # Optional: If you want to use official Ollama Python client (currently not used)
 # ollama
 

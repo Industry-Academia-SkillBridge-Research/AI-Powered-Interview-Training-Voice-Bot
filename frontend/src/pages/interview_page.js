@@ -179,7 +179,7 @@ function InterviewPage() {
     return (
       <div className="page">
         <div className="completion-card">
-          <div className="completion-icon">🎉</div>
+          <div className="completion-icon">✓</div>
           <h1>Interview Complete!</h1>
           <p className="completion-text">
             You've successfully completed all {totalQuestions} questions.

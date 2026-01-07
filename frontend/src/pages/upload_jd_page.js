@@ -112,7 +112,7 @@ function UploadJDPage() {
             <div className="upload-status">
               <div className="spinner"></div>
               <p className="upload-text">Processing job description...</p>
-              <p className="upload-subtext">Creating embeddings and initializing RAG system</p>
+              {/* <p className="upload-subtext">Creating embeddings and initializing RAG system</p> */}
             </div>
           ) : fileName ? (
             <div className="upload-status success">
@@ -138,22 +138,6 @@ function UploadJDPage() {
             {error}
           </div>
         )}
-
-        {/* <div className="info-box">
-          <h3>What happens next?</h3>
-          <ul className="info-list">
-            <li>Your job description will be processed using AI</li>
-            <li>RAG (Retrieval Augmented Generation) extracts key requirements</li>
-            <li>Interview questions are generated based on the JD content</li>
-            <li>You'll practice with realistic, role-specific questions</li>
-          </ul>
-        </div> */}
-
-        {/* <div className="tech-stack">
-          <div className="tech-badge">Ollama LLaMA 3.2</div>
-          <div className="tech-badge">RAG with FAISS</div>
-          <div className="tech-badge">Semantic Search</div>
-        </div> */}
       </div>
     </div>
   );

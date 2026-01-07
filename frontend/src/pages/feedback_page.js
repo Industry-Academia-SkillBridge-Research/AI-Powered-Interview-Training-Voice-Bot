@@ -24,7 +24,7 @@ function FeedbackPage() {
 
       <div className="feedback-container">
         <div className="feedback-card success-card">
-          <div className="card-icon">✅</div>
+          <div className="card-icon">✓</div>
           <h2>Interview Completed Successfully!</h2>
           <p className="card-description">
             You've finished your AI-powered interview training session. Great work!
@@ -41,7 +41,7 @@ function FeedbackPage() {
           </ul>
         </div> */}
 
-        <div className="feedback-card">
+        {/* <div className="feedback-card">
           <h3>Next Steps</h3>
           <div className="next-steps">
             <div className="step-item">
@@ -64,32 +64,6 @@ function FeedbackPage() {
                 <h4>Refine Your Approach</h4>
                 <p>Use insights gained to improve your interview technique</p>
               </div>
-            </div>
-          </div>
-        </div>
-
-        {/* <div className="feedback-card tech-card">
-          <h3>Powered By</h3>
-          <div className="tech-grid">
-            <div className="tech-item">
-              <div className="tech-icon">🦙</div>
-              <div className="tech-name">Ollama LLaMA 3.2</div>
-              <div className="tech-desc">Advanced language model</div>
-            </div>
-            <div className="tech-item">
-              <div className="tech-icon">🔍</div>
-              <div className="tech-name">RAG with FAISS</div>
-              <div className="tech-desc">Semantic search</div>
-            </div>
-            <div className="tech-item">
-              <div className="tech-icon">📊</div>
-              <div className="tech-name">Vector Embeddings</div>
-              <div className="tech-desc">Context-aware AI</div>
-            </div>
-            <div className="tech-item">
-              <div className="tech-icon">⚡</div>
-              <div className="tech-name">FastAPI Backend</div>
-              <div className="tech-desc">High-performance API</div>
             </div>
           </div>
         </div> */}

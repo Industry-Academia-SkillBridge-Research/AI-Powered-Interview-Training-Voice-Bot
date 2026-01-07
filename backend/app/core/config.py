@@ -3,10 +3,11 @@ from dotenv import load_dotenv
 import os
 from pathlib import Path
 
-# Load .env from project root
-# env_path = Path(__file__).resolve().parents[2] / ".env"
-load_dotenv()
+# Load .env from app directory
+env_path = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
+MAX_QUESTIONS = 7
 
 class Settings(BaseSettings):
     """
@@ -30,6 +31,14 @@ class Settings(BaseSettings):
 
     # ========= Security (future-ready) =========
     SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-key")
+
+    #========== Gemini =========
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    CHAT_MODEL: str = os.getenv("CHAT_MODEL", "gemini-1.5-flash")
+    # EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "gemini-embed-001")
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "models/embedding-001")
+    
+    
 
 
 # Singleton settings object

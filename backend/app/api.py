@@ -13,17 +13,18 @@ import tempfile
 import os
 import uvicorn
 
-from app.interview.jd_loader import extract_jd_text
-from app.interview.vector_store import JDVectorStore
-from app.interview.interview_engine import InterviewSession
-from app.services.openai_client import OllamaClient
+from app.interview_gemini.llm.gemini import get_embeddings
+from app.interview_gemini.rag.loader import chunk_text
+from app.interview_gemini.rag.vector_store import create_vector_store
+from app.interview_gemini.utils.session import create_session, get_session
+from app.interview_gemini.services.interview import generate_next_turn
 from app.core.config import settings
 
 
 # Initialize FastAPI app
 app = FastAPI(
     title="AI Interview Training API",
-    description="RAG-based interview training system with Ollama",
+    description="RAG-based interview training system with Gemini",
     version="1.0.0"
 )
 
@@ -35,6 +36,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize embeddings
+embeddings = get_embeddings()
 
 # Global state (in production, use session management or Redis)
 sessions = {}
@@ -75,8 +79,8 @@ async def root():
     return {
         "status": "online",
         "service": "AI Interview Training API",
-        "ollama_url": settings.OLLAMA_BASE_URL,
-        "model": settings.OLLAMA_MODEL
+        "chat_model": settings.CHAT_MODEL,
+        "embedding_model": settings.EMBEDDING_MODEL
     }
 
 
@@ -84,14 +88,12 @@ async def root():
 async def health_check():
     """Detailed health check"""
     try:
-        client = OllamaClient()
-        # Test connection to Ollama
+        # Test Gemini API
         return {
             "status": "healthy",
-            "ollama": "connected",
-            "base_url": settings.OLLAMA_BASE_URL,
-            "model": settings.OLLAMA_MODEL,
-            "embedding_model": settings.OLLAMA_EMBEDDING_MODEL
+            "gemini": "connected",
+            "chat_model": settings.CHAT_MODEL,
+            "embedding_model": settings.EMBEDDING_MODEL
         }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
@@ -113,8 +115,12 @@ async def upload_jd(file: UploadFile = File(...)):
             tmp_file.write(content)
             tmp_path = tmp_file.name
         
-        # Extract text from PDF
-        jd_text = extract_jd_text(Path(tmp_path))
+        # Extract text from PDF (using fitz/PyMuPDF)
+        doc = fitz.open(tmp_path)
+        jd_text = ""
+        for page in doc:
+            jd_text += page.get_text()
+        doc.close()
         
         # Clean up temp file
         os.unlink(tmp_path)
@@ -122,29 +128,24 @@ async def upload_jd(file: UploadFile = File(...)):
         if not jd_text or len(jd_text) < 50:
             raise HTTPException(status_code=400, detail="Could not extract sufficient text from PDF")
         
-        # Initialize Ollama client
-        client = OllamaClient()
+        # Chunk text and create vector store
+        chunks = chunk_text(jd_text)
+        vector_store = create_vector_store(chunks, embeddings)
         
-        # Initialize RAG vector store
-        vectorstore = JDVectorStore(jd_text, client)
+        # Create session
+        session_id = create_session(vector_store)
         
-        # Create interview session
-        session = InterviewSession(vectorstore)
-        
-        # Generate session ID
-        session_id = f"session_{len(sessions) + 1}_{file.filename}"
-        
-        # Store session
+        # Store additional session info
         sessions[session_id] = {
-            "session": session,
             "jd_text": jd_text,
-            "filename": file.filename
+            "filename": file.filename,
+            "chunks_count": len(chunks)
         }
         
         return JDUploadResponse(
             session_id=session_id,
             text=jd_text[:500] + "..." if len(jd_text) > 500 else jd_text,
-            chunks_count=len(vectorstore.chunks),
+            chunks_count=len(chunks),
             message="Job description processed successfully"
         )
     
@@ -159,19 +160,16 @@ async def start_interview(request: QuestionRequest):
     """
     Start interview and get first question
     """
-    if request.session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
     try:
-        session = sessions[request.session_id]["session"]
+        session = get_session(request.session_id)
         
         # Get first question
-        question = session.ask_next_question()
+        question, _, _ = generate_next_turn(session)
         
         return QuestionResponse(
             question=question,
-            question_number=session.question_count,
-            total_questions=session.max_questions,
+            question_number=session["question_count"],
+            total_questions=settings.MAX_INTERVIEW_QUESTIONS,
             is_complete=False
         )
     
@@ -184,34 +182,23 @@ async def next_question(request: QuestionRequest):
     """
     Submit answer and get next question
     """
-    if request.session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
     if not request.user_answer:
         raise HTTPException(status_code=400, detail="Answer is required")
     
     try:
-        session = sessions[request.session_id]["session"]
-        
-        # Check if interview is complete
-        if session.question_count >= session.max_questions:
-            return QuestionResponse(
-                question="",
-                question_number=session.question_count,
-                total_questions=session.max_questions,
-                is_complete=True
-            )
+        session = get_session(request.session_id)
         
         # Get next question based on answer
-        question = session.ask_next_question(user_answer=request.user_answer)
-        
-        is_complete = session.question_count >= session.max_questions
+        question, feedback, ended = generate_next_turn(
+            session,
+            user_answer=request.user_answer
+        )
         
         return QuestionResponse(
-            question=question if not is_complete else "",
-            question_number=session.question_count,
-            total_questions=session.max_questions,
-            is_complete=is_complete
+            question=question if not ended else "",
+            question_number=session["question_count"],
+            total_questions=settings.MAX_INTERVIEW_QUESTIONS,
+            is_complete=ended
         )
     
     except Exception as e:
@@ -223,17 +210,17 @@ async def get_session_status(session_id: str):
     """
     Get session status
     """
-    if session_id not in sessions:
+    try:
+        session = get_session(session_id)
+        
+        return SessionStatus(
+            session_id=session_id,
+            is_active=session["question_count"] < settings.MAX_INTERVIEW_QUESTIONS,
+            question_count=session["question_count"],
+            max_questions=settings.MAX_INTERVIEW_QUESTIONS
+        )
+    except Exception as e:
         raise HTTPException(status_code=404, detail="Session not found")
-    
-    session = sessions[session_id]["session"]
-    
-    return SessionStatus(
-        session_id=session_id,
-        is_active=session.question_count < session.max_questions,
-        question_count=session.question_count,
-        max_questions=session.max_questions
-    )
 
 
 @app.delete("/api/session/{session_id}")
@@ -241,12 +228,12 @@ async def end_session(session_id: str):
     """
     End and cleanup session
     """
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    del sessions[session_id]
-    
-    return {"message": "Session ended successfully", "session_id": session_id}
+    try:
+        if session_id in sessions:
+            del sessions[session_id]
+        return {"message": "Session ended successfully", "session_id": session_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error ending session: {str(e)}")
 
 
 @app.get("/api/sessions")
@@ -259,9 +246,8 @@ async def list_sessions():
         "sessions": [
             {
                 "session_id": sid,
-                "filename": data["filename"],
-                "question_count": data["session"].question_count,
-                "max_questions": data["session"].max_questions
+                "filename": data.get("filename", "unknown"),
+                "chunks_count": data.get("chunks_count", 0)
             }
             for sid, data in sessions.items()
         ]
@@ -269,15 +255,12 @@ async def list_sessions():
 
 
 if __name__ == "__main__":
-    # import uvicorn
-    
     print("=" * 60)
     print("Starting AI Interview Training API Server")
     print("=" * 60)
     print(f"\nAPI URL: http://localhost:8000")
     print(f"Docs: http://localhost:8000/docs")
-    print(f"Ollama: {settings.OLLAMA_BASE_URL}")
-    print(f"Model: {settings.OLLAMA_MODEL}")
-    print(f"Embeddings: {settings.OLLAMA_EMBEDDING_MODEL}\n")
+    print(f"Chat Model: {settings.CHAT_MODEL}")
+    print(f"Embeddings: {settings.EMBEDDING_MODEL}\n")
     
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

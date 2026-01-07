@@ -1,85 +1,57 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
-import * as mammoth from "mammoth/mammoth.browser";
-import { useJobContext } from "../job_context";
-
-// Point pdf.js to its bundled worker (CRA webpack handles asset URL)
-const workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url);
-GlobalWorkerOptions.workerSrc = workerSrc.toString();
-
-const formatBytes = (bytes) => {
-  if (!bytes) return "";
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), sizes.length - 1);
-  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`;
-};
-
-async function extractPdf(file) {
-  const data = new Uint8Array(await file.arrayBuffer());
-  const pdf = await getDocument({ data }).promise;
-  let text = "";
-  for (let i = 1; i <= pdf.numPages; i += 1) {
-    const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
-    text += content.items.map((item) => item.str).join(" ") + " ";
-  }
-  return text;
-}
-
-async function extractDocx(file) {
-  const arrayBuffer = await file.arrayBuffer();
-  const { value } = await mammoth.extractRawText({ arrayBuffer });
-  return value || "";
-}
-
-async function extractPlain(file) {
-  return file.text();
-}
+import { uploadJobDescription } from "../services/api";
 
 function UploadJDPage() {
   const [fileName, setFileName] = useState(null);
   const [fileSize, setFileSize] = useState(null);
   const [dragOver, setDragOver] = useState(false);
-  const [preview, setPreview] = useState("");
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
-  const [extracting, setExtracting] = useState(false);
   const navigate = useNavigate();
   const inputRef = useRef();
-  const { saveExtraction, clearJob, summary, extractedText } = useJobContext();
 
-  useEffect(() => {
-    if (!fileName && extractedText) {
-      setPreview(extractedText.slice(0, 400));
-    }
-  }, [extractedText, fileName]);
-
-  const readFile = async (file) => {
-    const mime = file.type;
-    if (mime === "application/pdf") return extractPdf(file);
-    if (mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return extractDocx(file);
-    if (mime === "text/plain") return extractPlain(file);
-    throw new Error("Unsupported file type. Please upload PDF, DOCX or TXT.");
+  const formatBytes = (bytes) => {
+    if (!bytes) return "";
+    const sizes = ["B", "KB", "MB", "GB"];
+    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), sizes.length - 1);
+    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`;
   };
 
   const handleFileObject = async (file) => {
     if (!file) return;
+    
+    // Validate file type
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      setError("Please upload a PDF file");
+      return;
+    }
+
     setError(null);
-    setExtracting(true);
+    setUploading(true);
     setFileName(file.name);
     setFileSize(file.size);
+
     try {
-      const text = await readFile(file);
-      if (!text.trim()) throw new Error("Could not extract text. Try a different file.");
-      saveExtraction({ name: file.name, size: file.size, text });
-      setPreview(text.slice(0, 600));
+      const response = await uploadJobDescription(file);
+      
+      // Store session data
+      localStorage.setItem('sessionId', response.session_id);
+      localStorage.setItem('jdText', response.text);
+      localStorage.setItem('chunksCount', response.chunks_count);
+      
+      // Navigate to interview page
+      setTimeout(() => {
+        navigate("/interview");
+      }, 800);
+      
     } catch (err) {
       console.error(err);
-      setError(err.message || "Extraction failed");
-      clearJob();
-      setPreview("");
+      setError(err.response?.data?.detail || "Upload failed. Please try again.");
+      setFileName(null);
+      setFileSize(null);
     } finally {
-      setExtracting(false);
+      setUploading(false);
     }
   };
 
@@ -100,105 +72,88 @@ function UploadJDPage() {
     setDragOver(true);
   };
 
-  const openFileDialog = () => inputRef.current?.click();
+  const handleDragLeave = () => {
+    setDragOver(false);
+  };
+
+  const openFilePicker = () => {
+    inputRef.current?.click();
+  };
 
   return (
     <div className="page">
       <div className="page-header">
         <div>
-          <p className="eyebrow">Step 1 · Upload</p>
-          <h1>Upload a job description to personalize the interview</h1>
-          <p className="muted">We extract key requirements (PDF, DOCX, TXT) and tailor voice questions on the fly.</p>
+          <div className="eyebrow">Step 1 of 2</div>
+          <h1>Upload Job Description</h1>
+          <p className="lead">
+            Upload the job description PDF to start your AI-powered interview training
+          </p>
         </div>
-        <div className="badge">Voice-ready</div>
       </div>
 
       <div className="upload-container">
-        <label
-          className={`drop-area ${dragOver ? "drag-over" : ""}`}
+        <div
+          className={`drop-zone ${dragOver ? "drag-over" : ""} ${uploading ? "uploading" : ""}`}
           onDrop={handleDrop}
           onDragOver={handleDragOver}
-          onDragLeave={() => setDragOver(false)}
-          onClick={openFileDialog}
+          onDragLeave={handleDragLeave}
+          onClick={openFilePicker}
         >
-          <div className="drop-left">
-            <div className="icon">📁</div>
-          </div>
-          <div className="drop-right">
-            <div className="drop-title">Drag & drop the job description</div>
-            <p className="muted">or click to browse. We recommend PDF or DOCX for best extraction.</p>
-            <input
-              ref={inputRef}
-              type="file"
-              accept=".pdf,.docx,.txt"
-              style={{ display: "none" }}
-              onChange={handleFile}
-            />
-            {!fileName && (
-              <div className="muted" style={{ marginTop: 12 }}>No file selected yet</div>
-            )}
-            {fileName && (
-              <div className="card" style={{ marginTop: 12 }}>
-                <div style={{ fontSize: 18 }}>📄</div>
-                <div>
-                  <div className="file-name">{fileName}</div>
-                  <div className="muted">{formatBytes(fileSize)}</div>
-                </div>
-              </div>
-            )}
-            {extracting && <div className="inline-pill">Extracting text…</div>}
-            {error && <div className="error-banner">{error}</div>}
-          </div>
-        </label>
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".pdf"
+            onChange={handleFile}
+            style={{ display: "none" }}
+          />
 
-        <div className="info-panel">
-          <div className="panel-title">Extraction preview</div>
-          {preview ? (
-            <div className="preview-box">
-              <div className="muted">First lines</div>
-              <p>{preview}</p>
+          {uploading ? (
+            <div className="upload-status">
+              <div className="spinner"></div>
+              <p className="upload-text">Processing job description...</p>
+              <p className="upload-subtext">Creating embeddings and initializing RAG system</p>
+            </div>
+          ) : fileName ? (
+            <div className="upload-status success">
+              <div className="success-icon">✓</div>
+              <p className="upload-text">{fileName}</p>
+              <p className="upload-subtext">{formatBytes(fileSize)}</p>
+              <p className="upload-hint">Redirecting to interview...</p>
             </div>
           ) : (
-            <div className="muted">Upload a file to see extracted content.</div>
+            <div className="drop-zone-content">
+              <div className="upload-icon">📄</div>
+              <p className="drop-zone-text">
+                <strong>Click to browse</strong> or drag and drop
+              </p>
+              <p className="drop-zone-hint">PDF files only • Max 10MB</p>
+            </div>
           )}
-
-          <div className="stats-row">
-            <div>
-              <div className="muted">Status</div>
-              <div className="stat-value">{extracting ? "Extracting" : fileName ? "Ready" : "Waiting"}</div>
-            </div>
-            <div>
-              <div className="muted">Characters read</div>
-              <div className="stat-value">{summary ? summary.length : 0}</div>
-            </div>
-            <div>
-              <div className="muted">File size</div>
-              <div className="stat-value">{fileSize ? formatBytes(fileSize) : "—"}</div>
-            </div>
-          </div>
-
-          <div className="actions">
-            <button
-              className="button"
-              disabled={!summary || extracting}
-              onClick={() => navigate("/interview")}
-            >
-              Continue to interview →
-            </button>
-            <button
-              className="secondary"
-              onClick={() => {
-                setFileName(null);
-                setFileSize(null);
-                setPreview("");
-                setError(null);
-                clearJob();
-              }}
-            >
-              Remove
-            </button>
-          </div>
         </div>
+
+        {error && (
+          <div className="error-box">
+            <span className="error-icon">⚠️</span>
+            {error}
+          </div>
+        )}
+
+        {/* <div className="info-box">
+          <h3>What happens next?</h3>
+          <ul className="info-list">
+            <li>Your job description will be processed using AI</li>
+            <li>RAG (Retrieval Augmented Generation) extracts key requirements</li>
+            <li>Interview questions are generated based on the JD content</li>
+            <li>You'll practice with realistic, role-specific questions</li>
+          </ul>
+        </div> */}
+
+        {/* <div className="tech-stack">
+          <div className="tech-badge">Ollama LLaMA 3.2</div>
+          <div className="tech-badge">RAG with FAISS</div>
+          <div className="tech-badge">Semantic Search</div>
+        </div> */}
       </div>
     </div>
   );
